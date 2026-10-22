@@ -39,6 +39,22 @@ ${known(o.findings, o.skipped)}
 Your result lists every confirmed finding, and any assigned file you could not read.`;
 }
 
+export function auditPrompt(o: { focus: string; shard: string[]; findings: Finding[]; skipped: SkipRecord[] }): string {
+  return `Final audit before this project is declared clean: the review rounds found nothing new in their last pass. Find what they missed. Focus: ${o.focus}.
+
+Read-only: do not edit, write, stage, or commit anything. Work without asking questions.
+
+These files are assigned to you. Read every one in full, paging through long files with offset and limit, and follow callers and callees into other files as needed:
+${o.shard.join("\n")}
+
+Be strict about evidence. Report a defect only when you can point to the code that causes it and describe an input or sequence that makes it fail. For each defect, search the whole project with rg and list every site. Skip style, naming, and speculation.
+
+Already known; do not report again unless you have new evidence:
+${known(o.findings, o.skipped)}
+
+Your result lists every confirmed finding, and any assigned file you could not read.`;
+}
+
 export function patternPrompt(o: { files: number; findings: Finding[]; skipped: SkipRecord[] }): string {
   return `Search this whole project (${o.files} text files; list them with git ls-files) for recurring handling that should go through one shared abstraction, so that its variants interact through a minimal, necessary interface. This is not a bug review.
 

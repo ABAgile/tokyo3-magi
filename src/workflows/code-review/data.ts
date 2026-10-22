@@ -50,12 +50,31 @@ export interface RoundInfo {
   failed: string[];
 }
 
+export type AuditVerdict = "pass" | "findings" | "incomplete";
+
+/** One audit pass: the whole project, split into slices read by strong models in parallel. */
+export interface AuditRun {
+  id: number;
+  /** The review round it followed. */
+  after: number;
+  /** Fixed when the audit starts, so an interrupted audit resumes on the same slices. */
+  shards: string[][];
+  reported: string[];
+  /** Files an auditor said it could not read. */
+  unread: string[];
+  /** Slices where every model failed. */
+  failed: string[];
+  done: boolean;
+  verdict?: AuditVerdict;
+}
+
 export interface Data {
   /** The round to run next (or running). */
   round: number;
   /** The last round converged and nothing new arrived since. */
   converged: boolean;
   rounds: RoundInfo[];
+  audits: AuditRun[];
   findings: Finding[];
   seq: Record<"R" | "P" | "Q", number>;
   coverage: {
@@ -74,7 +93,7 @@ export interface Data {
 
 export function initData(): Data {
   return {
-    round: 1, converged: false, rounds: [], findings: [], seq: { R: 0, P: 0, Q: 0 },
+    round: 1, converged: false, rounds: [], audits: [], findings: [], seq: { R: 0, P: 0, Q: 0 },
     coverage: { visited: [], missed: {} }, checkGate: true,
   };
 }

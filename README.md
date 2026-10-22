@@ -92,8 +92,9 @@ original checkout is never touched. Nothing is pushed; merging the branch is you
 
 Each round has two parts:
 
-1. **Fix.** Every open finding is handled on its own: a fixer model verifies it, then fixes, rejects, marks
-   it a duplicate, or defers it to a human. A fix counts only if the project's check passes (for Go: build,
+1. **Fix.** Every open finding is handled on its own, one after another. A fixer verifies it, then fixes,
+   rejects, marks it a duplicate, or defers it to a human. Fixers start with the cheapest model and move up to
+   a stronger one only when an attempt fails. A fix counts only if the project's check passes (for Go: build,
    vet, test). Each fix becomes one commit.
 2. **Review.** Running in parallel:
    - **Reviewers** read files no one has read yet, plus everything that changed since the last review.
@@ -102,10 +103,15 @@ Each round has two parts:
      shared interface. Behavior-preserving consolidations go to a fixer; ones that need a judgment become
      questions.
 
-The loop **converges** when a review round finds nothing new, nothing is left open, and every file has been
-read. It also stops at the round limit; findings from the last review are then still fixed, but not
-reviewed again. Finally, the per-finding commits are organized into a history a reviewer can follow. The
-original per-finding history is kept alongside.
+A round with nothing new, nothing open, and every file read is **clean**. A clean round triggers the **audit**:
+the whole project is read once more, in parallel slices, by the audit models, with stricter rules about
+evidence. If the audit finds something, those findings are fixed and reviewed as usual, and the loop does not
+audit again. If the audit cannot read every file, the run ends as **unaudited** rather than converged.
+
+The loop stops at the round limit too; findings from the last review are then still fixed, but not reviewed
+again. Finally, a cheap organizer model groups the per-finding commits into a history a reviewer can follow,
+and the original history is kept alongside. Setting `audits` to 0, or passing `--audits 0`, turns the audit
+off.
 
 ## Getting started
 
@@ -125,7 +131,15 @@ ln -s /tokyo3/proj/abagile/magi/bin/magi ~/.local/bin/magi   # optional
 The target repository must have no uncommitted changes, because a run starts from its current commit.
 
 Defaults, such as where runs are kept or which models fill each role, can be set once in `config.json`
-next to this README:
+next to this README. The file is optional; without it, the built-in defaults apply. To create it with the
+built-in defaults and then edit it:
+
+```sh
+magi config init      # writes config.json (refuses to overwrite an existing one)
+magi config           # shows every value in effect, and whether it comes from config.json or the built-in
+```
+
+A file that sets only a few values is enough, for example:
 
 ```json
 {
@@ -137,6 +151,11 @@ next to this README:
   }
 }
 ```
+
+Settings are read when a run starts and kept with that run, so editing the file does not change a run
+already in progress; `magi resume` takes its settings from the run, with flags on top. `magi config` reports
+misspelled keys and unknown model roles, which would otherwise be ignored. The check command is not written
+by `magi config init`: its default depends on each target repository.
 
 Each run keeps its working copy, progress, and reports in its own directory,
 `<runsDir>/<repo>/<workflow>-<timestamp>/`, outside the target repository. Pick a `runsDir` whose
@@ -153,6 +172,7 @@ magi request <run dir> "make X do Y"      # ask for a change
 magi resume <run dir>                     # continue: after answers, requests, or an interruption
 magi resume <run dir> --max-rounds 10     # allow more review rounds
 magi list [./vault]                       # all runs, or those on one repository
+magi config                               # the settings in effect, and where each comes from
 magi clean <run dir>                      # remove a run; its branch too, once merged
 ```
 
@@ -170,7 +190,7 @@ A typical cycle:
 6. **Clean up** with `magi clean`. A run whose work is not merged keeps its branch, unless you add
    `--force`.
 
-Exit status: `0` converged, `1` stopped at the round limit, `2` error, `130` interrupted. Ctrl-C is
+Exit status: `0` converged, `1` stopped at the round limit or unaudited, `2` error, `130` interrupted. Ctrl-C is
 safe: resume later.
 
 `magi help code-review` lists the workflow's options: round limit, number of reviewers, the check command,

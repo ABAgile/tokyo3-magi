@@ -13,8 +13,8 @@ import { filesRead, inventory, makeShards, unread } from "../../kit/coverage.ts"
 import { rotation } from "../../kit/models.ts";
 import { organizeHistory } from "../../kit/organize.ts";
 import { type Config, defaults, options } from "./config.ts";
-import { addFinding, type Data, findById, type Finding, initData, markVisited, openFindings, roundInfo } from "./data.ts";
-import { findingText, fixPrompt, patternPrompt, reviewPrompt } from "./prompts.ts";
+import { addFinding, type AuditRun, type AuditVerdict, type Data, findById, type Finding, initData, markVisited, openFindings, roundInfo } from "./data.ts";
+import { auditPrompt, findingText, fixPrompt, patternPrompt, reviewPrompt } from "./prompts.ts";
 import { report } from "./report.ts";
 import { PatternSchema, type Resolution, ResolutionSchema, ReviewSchema } from "./schemas.ts";
 
@@ -33,7 +33,11 @@ export const codeReview: Workflow<Data, Config> = {
     for (;;) {
       const n = ctx.data.round;
       if (takeHumanInput(ctx)) ctx.data.converged = false;
-      if (ctx.data.converged) return "converged";
+      if (ctx.data.converged) {
+        const outcome = await conclude(ctx);
+        if (outcome) return finish(ctx, outcome);
+        ctx.data.converged = false; // the audit found work
+      }
 
       await fixOpenFindings(ctx, n);
       if (n > ctx.config.maxRounds) return finish(ctx, "exhausted");
@@ -45,7 +49,11 @@ export const codeReview: Workflow<Data, Config> = {
       ctx.data.round = n + 1;
       ctx.save();
       ctx.log(`round ${n}: ${reported} new finding(s), ${roundInfo(ctx.data, n).commits.length} commit(s), ${unreadCount} file(s) not read yet${failed.length ? `; failed: ${failed.join(", ")}` : ""}`);
-      if (ctx.data.converged) return finish(ctx, "converged");
+      if (ctx.data.converged) {
+        const outcome = await conclude(ctx);
+        if (outcome) return finish(ctx, outcome);
+        ctx.data.converged = false;
+      }
     }
   },
 };
@@ -63,6 +71,77 @@ async function finish(ctx: C, outcome: Outcome): Promise<Outcome> {
     ctx.save();
   }
   return outcome;
+}
+
+// ---- audit ----
+
+/**
+ * What a clean review leads to: a final audit of the whole project, unless the audits are used up. Returns the
+ * outcome, or undefined when the audit found work and the loop must go on.
+ */
+async function conclude(ctx: C): Promise<Outcome | undefined> {
+  const audits = ctx.data.audits;
+  if (!audits.some((a) => !a.done)) {
+    if (audits.at(-1)?.verdict === "pass") return "converged";
+    if (audits.filter((a) => a.verdict === "findings").length >= ctx.config.audits) return "converged";
+  }
+  const verdict = await audit(ctx);
+  if (verdict === "findings") return undefined;
+  return verdict === "pass" ? "converged" : "unaudited";
+}
+
+/** One audit: every file, in slices read in parallel. An interrupted audit resumes on the same slices. */
+async function audit(ctx: C): Promise<AuditVerdict> {
+  const d = ctx.data;
+  let run: AuditRun | undefined = d.audits.find((a) => !a.done);
+  if (!run) {
+    const inv = inventory(ctx.cwd, ctx.config.coverageExclude);
+    const files = [...inv.keys()];
+    run = {
+      id: d.audits.length + 1,
+      after: d.round - 1,
+      shards: makeShards(inv, files, [], Math.max(files.length, 1), ctx.config.shardLines).filter((s) => s.length > 0),
+      reported: [], unread: [], failed: [], done: false,
+    };
+    d.audits.push(run);
+    ctx.save();
+  }
+  const current = run;
+  await Promise.all(current.shards.map((shard, j) => auditShard(ctx, current, j, shard)));
+  current.done = true;
+  current.verdict = current.failed.length || current.unread.length ? "incomplete" : current.reported.length ? "findings" : "pass";
+  ctx.log(`audit ${current.id} after round ${current.after}: ${current.verdict}, ${current.reported.length} finding(s)`
+    + (current.unread.length ? `, ${current.unread.length} file(s) not read` : "")
+    + (current.failed.length ? `, failed: ${current.failed.join(", ")}` : ""));
+  ctx.save();
+  return current.verdict;
+}
+
+async function auditShard(ctx: C, run: AuditRun, j: number, shard: string[]): Promise<void> {
+  const key = `audit${run.id}/${j + 1}`;
+  await ctx.step(key, async () => {
+    const o = await ctx.agent({
+      key, write: false, result: ReviewSchema,
+      models: rotation(ctx.config.models.audit, run.id + j),
+      prompt: () => auditPrompt({ focus: ctx.config.focus, shard, findings: ctx.data.findings, skipped: ctx.skipped() }),
+    });
+    return {
+      ok: o.output !== undefined, model: o.model ?? "", findings: o.output?.findings ?? [],
+      notCovered: o.output?.not_covered ?? [], read: readBy(ctx, o),
+    };
+  }, (r) => {
+    markVisited(ctx.data, r.read);
+    if (!r.ok) run.failed.push(key);
+    run.unread.push(...r.notCovered);
+    for (const x of r.findings) {
+      const f = addFinding(ctx.data, {
+        kind: "issue", round: run.after, foundBy: r.model, title: x.title, severity: x.severity, sites: x.sites,
+        details: { impact: x.impact, reasoning: x.reasoning, fix: x.fix },
+      });
+      run.reported.push(f.id);
+      reported(ctx, run.after, f);
+    }
+  });
 }
 
 // ---- human input ----
@@ -141,7 +220,7 @@ async function fix(ctx: C, n: number, f: Finding): Promise<void> {
     const failedModels = f.attempts.filter((a) => a.outcome === "failed").map((a) => a.model);
     const outcome = await ctx.agent({
       key, write: true, result: ResolutionSchema, maxRepairs: 4,
-      models: rotation(cfg.models.fix, seq(f), [f.foundBy, ...failedModels]).slice(0, cfg.fixTries),
+      models: rotation(cfg.models.fix, 0, [f.foundBy, ...failedModels]).slice(0, cfg.fixTries),
       prompt: (failures) => fixPrompt({ finding: f, check: ctx.data.checkGate ? cfg.check : "", open: openFindings(ctx.data), failures }),
       // The check gate: a fixed result that fails the check goes back to the same fixer with the output.
       verify: (r) => {

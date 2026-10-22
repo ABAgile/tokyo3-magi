@@ -1,5 +1,5 @@
 // Command line. Run it through bin/magi, which sets NODE_USE_ENV_PROXY so the pi SDK honors HTTPS_PROXY.
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
@@ -10,10 +10,12 @@ import { loadState, Run, saveState } from "./engine/run.ts";
 import { cleanRun, findRunDir, formatRuns, runsOfRepo, runsUnder, summarize } from "./engine/runs.ts";
 import type { RunState, Workflow } from "./engine/types.ts";
 import { createRunState, lock } from "./engine/workspace.ts";
+import { describeSettings, DEFAULT_DRIVER, initSettings, loadSettings, resolveRunsRoot, workflowConfig } from "./settings.ts";
 import { workflows } from "./workflows/index.ts";
 
 const HOME = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = join(HOME, "bin", "magi");
+const SETTINGS = join(HOME, "config.json");
 
 const USAGE = `magi: agent loops that iterate until the work converges.
 
@@ -26,6 +28,8 @@ const USAGE = `magi: agent loops that iterate until the work converges.
   magi list [<dir>]                     list runs: all of them, or those on the repository at <dir>
   magi clean <run dir>... [--force]     remove runs: worktree, run directory, and their branches if merged;
                                         --force also deletes unmerged branches and uncommitted changes
+  magi config [init]                    show the settings in effect, with where each comes from;
+                                        "init" writes config.json with the built-in defaults
   magi help [workflow]                  this text, or a workflow's options
 
 A <run dir> is a path, or a name relative to the runs directory as shown by magi list.
@@ -38,8 +42,9 @@ Options for every workflow:
 Workflows:
 ${Object.values(workflows).map((w) => `  ${w.name.padEnd(16)}${w.summary}`).join("\n")}
 
-Defaults can be overridden in ${join(HOME, "config.json")}:
+Defaults can be overridden in ${SETTINGS}:
   { "driver": "...", "runsDir": "...", "<workflow>": { ...settings } }
+Run "magi config" to see the values in effect.
 Exit status: 0 converged, 1 stopped at the round limit, 2 error, 130 interrupted.`;
 
 const COMMON = {
@@ -59,15 +64,8 @@ function getWorkflow(name: string): Workflow<any, any> {
   return w;
 }
 
-function userConfig(): Record<string, any> {
-  const file = join(HOME, "config.json");
-  return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
-}
-
-/** Where runs live: --runs-dir, else $MAGI_RUNS, else runsDir in config.json (relative to magi), else magi/runs. */
 function runsRoot(values: Record<string, unknown>): string {
-  const configured = userConfig().runsDir as string | undefined;
-  return resolve((values["runs-dir"] as string) ?? process.env.MAGI_RUNS ?? (configured ? resolve(HOME, configured) : join(HOME, "runs")));
+  return resolveRunsRoot(loadSettings(SETTINGS), HOME, process.env, values["runs-dir"] as string | undefined).path;
 }
 
 /** Every option of every workflow, so the command line parses strictly before the workflow is known. */
@@ -137,21 +135,33 @@ async function main(argv: string[]): Promise<number> {
     console.log(formatRuns((arg ? runsOfRepo(arg, root) : runsUnder(root)).map(summarize), root));
     return 0;
   }
+  if (command === "config") {
+    if (arg === "init") {
+      initSettings(SETTINGS, Object.values(workflows));
+      console.log(`wrote ${SETTINGS} with the built-in defaults; edit it to change them.`);
+      console.log("The check command is left out: it is detected from each target repository (e.g. Go projects).");
+      return 0;
+    }
+    if (arg) throw new Error(`unknown config command ${arg}; use "magi config" or "magi config init"`);
+    console.log(describeSettings({
+      file: SETTINGS, settings: loadSettings(SETTINGS), home: HOME, env: process.env, cwd: process.cwd(),
+      runsFlag: values["runs-dir"] as string | undefined, workflows: Object.values(workflows),
+    }));
+    return 0;
+  }
   if (!arg) throw new Error(`${command} needs an argument\n\n${USAGE}`);
   switch (command) {
     case "run": {
       const workflow = getWorkflow(arg);
       const dir = rest[0];
       if (!dir) throw new Error(`run needs a directory: magi run ${workflow.name} <dir>`);
-      const user = userConfig();
-      const config = workflow.defaults(resolve(dir));
-      const overrides = user[workflow.name] ?? {};
-      Object.assign(config, overrides, { models: { ...config.models, ...overrides.models } });
+      const settings = loadSettings(SETTINGS);
+      const config = workflowConfig(workflow, dir, settings);
       applyOptions(workflow, values, config);
       const state = createRunState({
         workflow, config, targetDir: dir,
         runsRoot: runsRoot(values),
-        driver: (values.driver as string) ?? user.driver ?? "pi-sdk",
+        driver: (values.driver as string) ?? settings.driver ?? DEFAULT_DRIVER,
       });
       createDriver(state.driver);
       saveState(state);

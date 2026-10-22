@@ -134,7 +134,8 @@ export interface OptionSpec<C> {
   apply: (config: C, value: string | boolean | string[]) => void;
 }
 
-export type Outcome = "converged" | "exhausted";
+/** converged: a clean review and a clean audit. unaudited: clean reviews, but the audit could not read everything. */
+export type Outcome = "converged" | "exhausted" | "unaudited";
 
 export interface Workflow<D, C> {
   name: string;

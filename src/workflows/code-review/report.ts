@@ -18,6 +18,10 @@ export function report(s: RunState<Data, Config>): string {
   ];
   if (d.baseline && !d.baseline.ok) out.push("The check failed before any change, so fixes were not gated on it until it passed.");
   if (d.organized) out.push(`History organized: ${d.organized.from} commits into ${d.organized.to}; the per-finding history is on \`${d.organized.raw}\`.`);
+  if (d.audits.length) {
+    out.push("", "## Audits", "", "| Audit | After round | Verdict | Findings | Not read |", "|---|---|---|---|---|");
+    for (const a of d.audits) out.push(`| ${a.id} | ${a.after} | ${a.verdict ?? "running"} | ${a.reported.join(" ") || "-"} | ${a.unread.length || "-"} |`);
+  }
   out.push("", "## Findings", "", "| ID | Kind | Status | Title | Commit |", "|---|---|---|---|---|");
   for (const f of d.findings) {
     const kind = f.kind === "pattern" ? `pattern (${f.change})` : f.kind === "request" ? "request" : f.severity;

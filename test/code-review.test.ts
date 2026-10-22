@@ -14,9 +14,9 @@ import { FakeDriver, type FakeTurn, newRun, scratchRepo, sh } from "./helpers.ts
 function config(repo: string, extra: Partial<Config> = {}): Config {
   return {
     ...defaults(repo),
-    reviewers: 2, shardLines: 12, maxRounds: 4,
+    reviewers: 2, shardLines: 12, maxRounds: 4, audits: 0,
     check: "! git grep -q BROKEN -- '*.go'",
-    models: { review: ["r/one", "r/two"], patterns: ["p/one"], fix: ["r/one", "f/one", "f/two"], organize: ["o/one"] },
+    models: { review: ["r/one", "r/two"], patterns: ["p/one"], fix: ["f/one", "f/two", "f/three"], organize: ["o/one"], audit: ["a/one", "a/two"] },
     ...extra,
   };
 }
@@ -64,7 +64,7 @@ test("code-review: review, gated fixes, failover, deferral, organize, then a hum
           },
         };
       case "r2/fix/R1/1":
-        assert.notEqual(task.model, "r/one", "the fixer is not the model that found the issue");
+        assert.equal(task.model, "f/one", "the cheapest model that did not find the issue goes first");
         if (turn === 1) {
           appendFileSync(join(wt, "a.go"), "// BROKEN\n");
           return { submit: fixed("Check for nil in a") };
@@ -174,4 +174,69 @@ test("code-review: a review that failed with every model does not count as clean
   wt = run.state.target.worktree;
   assert.equal(await run.execute(codeReview), "converged");
   assert.deepEqual(run.data.rounds.map((r) => r.failed), [["r1/review/1"], []], "round 1 failed, so round 2 reviewed again");
+});
+
+test("code-review: a clean review is followed by an audit of every file, which converges when clean", async () => {
+  const repo = scratchRepo();
+  let wt = "";
+  const audited: string[] = [];
+  const driver = new FakeDriver((task) => {
+    if (task.key.startsWith("audit1/")) {
+      const shard = task.prompt.split("\n").filter((l) => /\.go$/.test(l));
+      audited.push(...shard);
+      return { submit: { findings: [] }, reads: shard.map((p) => join(wt, p)) };
+    }
+    const q = quiet(task, wt);
+    if (q) return q;
+    throw new Error(`unexpected step ${task.key}`);
+  });
+  const run = newRun(codeReview, config(repo, { reviewers: 1, shardLines: 1000, patterns: false, organize: false, audits: 1 }), repo, driver);
+  wt = run.state.target.worktree;
+  assert.equal(await run.execute(codeReview), "converged");
+  assert.deepEqual(audited.sort(), ["a.go", "b.go", "c/d.go"]);
+  assert.deepEqual(run.data.audits.map((a) => [a.id, a.after, a.verdict]), [[1, 1, "pass"]]);
+});
+
+test("code-review: an audit finding is fixed and reviewed, and the loop converges without a second audit", async () => {
+  const repo = scratchRepo();
+  let wt = "";
+  const driver = new FakeDriver((task) => {
+    if (task.key === "audit1/1") return { submit: { findings: [issue("Off-by-one in b.go", "b.go")] } };
+    if (task.key === "r2/fix/R1/1") {
+      appendFileSync(join(wt, "b.go"), "// fixed after audit\n");
+      return { submit: fixed("Fix off-by-one in b.go") };
+    }
+    const q = quiet(task, wt);
+    if (q) return q;
+    throw new Error(`unexpected step ${task.key}`);
+  });
+  const run = newRun(codeReview, config(repo, { reviewers: 1, shardLines: 1000, patterns: false, organize: false, audits: 1 }), repo, driver);
+  wt = run.state.target.worktree;
+  assert.equal(await run.execute(codeReview), "converged");
+  assert.equal(run.data.findings[0].status, "fixed");
+  assert.deepEqual(run.data.audits.map((a) => a.verdict), ["findings"]);
+  assert.equal(driver.turns.some((t) => t.key.startsWith("audit2/")), false, "no second audit after the fix");
+});
+
+test("code-review: an audit that could not read every file is unaudited; resuming audits again", async () => {
+  const repo = scratchRepo();
+  let wt = "";
+  let auditClean = false;
+  const driver = new FakeDriver((task) => {
+    if (task.key.startsWith("audit")) {
+      return { submit: { findings: [], not_covered: auditClean ? [] : ["b.go"] }, reads: ["a.go", "c/d.go"].map((p) => join(wt, p)) };
+    }
+    const q = quiet(task, wt);
+    if (q) return q;
+    throw new Error(`unexpected step ${task.key}`);
+  });
+  const run = newRun(codeReview, config(repo, { reviewers: 1, shardLines: 1000, patterns: false, organize: false, audits: 1 }), repo, driver);
+  wt = run.state.target.worktree;
+  assert.equal(await run.execute(codeReview), "unaudited");
+  assert.deepEqual(run.data.audits.map((a) => a.verdict), ["incomplete"]);
+  assert.deepEqual(run.data.audits[0].unread, ["b.go"]);
+
+  auditClean = true;
+  assert.equal(await new Run(run.state, { driver, log: () => {} }).execute(codeReview), "converged");
+  assert.deepEqual(run.data.audits.map((a) => a.verdict), ["incomplete", "pass"]);
 });
