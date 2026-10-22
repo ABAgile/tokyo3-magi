@@ -1,0 +1,24 @@
+{
+  "name": "magi",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.3.0",
+    "typebox": "1.3.27"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "typescript": "^5.9"
+  },
+  "bin": {
+    "magi": "bin/magi"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "check": "npm run typecheck && npm test"
+  }
+}

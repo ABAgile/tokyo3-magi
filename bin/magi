@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Entry point. NODE_USE_ENV_PROXY makes the in-process pi SDK honor HTTPS_PROXY the way the pi CLI does.
+set -euo pipefail
+dir="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+if [ ! -d "$dir/node_modules/@earendil-works/pi-coding-agent" ]; then
+  npm --prefix "$dir" ci --omit=dev --no-audit --no-fund >&2
+fi
+NODE_USE_ENV_PROXY=1 exec node "$dir/src/cli.ts" "$@"
