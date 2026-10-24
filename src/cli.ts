@@ -4,12 +4,13 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
 import { createDriver, drivers } from "./drivers/index.ts";
-import { addRequest, answer, answerInteractively } from "./engine/inbox.ts";
+import { answerInteractively, applyInbox, queueAnswer, queueRequest } from "./engine/inbox.ts";
+import { writeHtmlReport } from "./engine/html.ts";
 import { writeReports } from "./engine/report.ts";
 import { loadState, Run, saveState } from "./engine/run.ts";
 import { cleanRun, findRunDir, formatRuns, runsOfRepo, runsUnder, summarize } from "./engine/runs.ts";
 import type { RunState, Workflow } from "./engine/types.ts";
-import { createRunState, lock } from "./engine/workspace.ts";
+import { createRunState, lock, tryLock } from "./engine/workspace.ts";
 import { describeSettings, DEFAULT_DRIVER, initSettings, loadSettings, resolveRunsRoot, workflowConfig } from "./settings.ts";
 import { workflows } from "./workflows/index.ts";
 
@@ -25,6 +26,8 @@ const USAGE = `magi: agent loops that iterate until the work converges.
   magi decide <run dir> <ID> <answer>   answer one: an option number, an instruction, or "skip: <reason>"
   magi request <run dir> <text>         ask for a change; resume the run to apply it
   magi status <run dir>                 print the summary
+  magi report <run dir> [--no-sessions] write report/index.html: timeline, findings, commits, and a
+                                        transcript of each agent session (--no-sessions skips transcripts)
   magi list [<dir>]                     list runs: all of them, or those on the repository at <dir>
   magi clean <run dir>... [--force]     remove runs: worktree, run directory, and their branches if merged;
                                         --force also deletes unmerged branches and uncommitted changes
@@ -51,6 +54,7 @@ const COMMON = {
   driver: { type: "string" },
   "runs-dir": { type: "string" },
   force: { type: "boolean" },
+  "no-sessions": { type: "boolean" },
   help: { type: "boolean", short: "h" },
 } satisfies ParseArgsOptionsConfig;
 
@@ -85,8 +89,24 @@ function applyOptions(w: Workflow<any, any>, values: Record<string, unknown>, co
 
 function open(arg: string, values: Record<string, unknown>) {
   const state = loadState(findRunDir(arg, runsRoot(values)));
-  const workflow = getWorkflow(state.workflow);
-  return { state, workflow, save: () => { saveState(state); writeReports(state, workflow, CLI); } };
+  return { state, workflow: getWorkflow(state.workflow) };
+}
+
+/**
+ * Apply queued answers and requests now, when no loop is running on the run. A running loop takes them in itself,
+ * so the state file is never written by two processes. Returns whether the run was stopped.
+ */
+function applyWhenIdle(runDir: string, workflow: Workflow<any, any>): boolean {
+  const unlock = tryLock(runDir);
+  if (!unlock) return false;
+  try {
+    const state = loadState(runDir);
+    if (applyInbox(runDir, state)) saveState(state);
+    writeReports(state, workflow, CLI);
+    return true;
+  } finally {
+    unlock();
+  }
 }
 
 async function drive(state: RunState, workflow: Workflow<any, any>): Promise<number> {
@@ -130,6 +150,7 @@ async function main(argv: string[]): Promise<number> {
     return command ? 0 : 2;
   }
   if (values.force && command !== "clean") throw new Error("--force is only for magi clean");
+  if (values["no-sessions"] && command !== "report") throw new Error("--no-sessions is only for magi report");
   if (command === "list") {
     const root = runsRoot(values);
     console.log(formatRuns((arg ? runsOfRepo(arg, root) : runsUnder(root)).map(summarize), root));
@@ -175,25 +196,29 @@ async function main(argv: string[]): Promise<number> {
     }
     case "decide": {
       const r = open(arg, values);
-      if (rest.length >= 2) {
-        console.log(answer(r.state, rest[0], rest.slice(1).join(" ")));
-        r.save();
-      } else {
-        await answerInteractively(r.state, r.save);
-      }
+      if (rest.length >= 2) console.log(queueAnswer(r.state.runDir, r.state, rest[0], rest.slice(1).join(" ")));
+      else await answerInteractively(r.state.runDir, r.state);
+      console.log(applyWhenIdle(r.state.runDir, r.workflow)
+        ? `The run is stopped, so the answer${rest.length >= 2 ? "" : "s"} took effect now; resume the run to act on ${rest.length >= 2 ? "it" : "them"}.`
+        : "The run is active: it takes answers in after its current fix.");
       return 0;
     }
     case "request": {
       const r = open(arg, values);
       const text = rest.join(" ").trim();
       if (!text) throw new Error("request needs the change to make");
-      console.log(`recorded ${addRequest(r.state, text)}; resume the run to apply it`);
-      r.save();
+      const id = queueRequest(r.state.runDir, text);
+      console.log(`recorded ${id}; ${applyWhenIdle(r.state.runDir, r.workflow) ? "the run is stopped: resume it to apply the request" : "the active run takes it in after its current fix"}`);
+      return 0;
+    }
+    case "report": {
+      const r = open(arg, values);
+      console.log(writeHtmlReport(r.state, r.workflow, { sessions: values["no-sessions"] !== true, pi: process.env.MAGI_PI_BIN ?? "pi" }));
       return 0;
     }
     case "status": {
       const r = open(arg, values);
-      r.save();
+      writeReports(r.state, r.workflow, CLI);
       console.log(readFileSync(join(r.state.runDir, "summary.md"), "utf8"));
       return 0;
     }

@@ -30,6 +30,8 @@ export interface Config {
   /** Shell command a fix must pass, run in the target directory. "" disables the gate. */
   check: string;
   checkTimeoutSec: number;
+  /** Minutes one fixer attempt may take, repairs included; a timed-out attempt counts as failed. */
+  fixTimeoutMin: number;
   /** Fixer models tried per finding before it goes to a human; the third is Opus, for the hardest findings. */
   fixTries: number;
   /** Squash and reorder the per-finding commits at the end. */
@@ -57,6 +59,7 @@ export function defaults(targetDir: string): Config {
     check: existsSync(join(targetDir, "go.mod")) ? "go build ./... && go vet ./... && go test ./..." : "",
     checkTimeoutSec: 1200,
     fixTries: 3,
+    fixTimeoutMin: 20,
     organize: true,
     checkEachCommit: false,
     coverageExclude: [],
@@ -79,6 +82,7 @@ export const options: Record<string, OptionSpec<Config>> = {
   "max-rounds": { type: "string", help: "review rounds at most (default 6)", apply: (c, v) => (c.maxRounds = positive("max-rounds", v)) },
   audits: { type: "string", help: "audit passes after a clean review; 0 turns the audit off (default 1)", apply: (c, v) => (c.audits = atLeast("audits", v, 0)) },
   "audit-models": { type: "string", help: "comma-separated audit models, in order", apply: (c, v) => (c.models.audit = list(v)) },
+  "fix-timeout": { type: "string", help: "minutes one fixer attempt may take, repairs included (default 20)", apply: (c, v) => (c.fixTimeoutMin = positive("fix-timeout", v)) },
   "fix-tries": { type: "string", help: "fixer models tried per finding before it goes to a human (default 3)", apply: (c, v) => (c.fixTries = positive("fix-tries", v)) },
   reviewers: { type: "string", help: "parallel reviewers per round (default 2)", apply: (c, v) => (c.reviewers = positive("reviewers", v)) },
   "shard-lines": { type: "string", help: "lines of unread files per reviewer per round (default 6000)", apply: (c, v) => (c.shardLines = positive("shard-lines", v)) },

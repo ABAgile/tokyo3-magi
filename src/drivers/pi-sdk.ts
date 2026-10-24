@@ -15,6 +15,7 @@ export const READ_TOOLS = ["read", "bash", "grep", "find", "ls"];
 export const WRITE_TOOLS = [...READ_TOOLS, "edit", "write"];
 
 interface Conversation {
+  key: string;
   session: AgentSession;
   /** Cumulative cost already reported in earlier turns. */
   reported: number;
@@ -47,7 +48,7 @@ export class PiSdkDriver implements Driver {
       customTools: [submitTool(task.resultFile, task.resultSchema)],
       sessionManager: SessionManager.create(task.cwd, task.sessionDir),
     });
-    const conv: Conversation = { session, reported: 0, reads: [], commands: [] };
+    const conv: Conversation = { key: task.key, session, reported: 0, reads: [], commands: [] };
     session.subscribe((e) => {
       if (e.type !== "tool_execution_start") return;
       if (e.toolName === "read" && typeof e.args?.path === "string") conv.reads.push(e.args.path);
@@ -83,6 +84,10 @@ export class PiSdkDriver implements Driver {
   close(ref: string): void {
     this.#open.get(ref)?.session.dispose();
     this.#open.delete(ref);
+  }
+
+  async abort(key: string): Promise<void> {
+    await Promise.all([...this.#open.values()].filter((c) => c.key === key).map((c) => c.session.abort()));
   }
 
   async abortAll(): Promise<void> {

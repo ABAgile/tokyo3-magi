@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { answer } from "../src/engine/inbox.ts";
+import { queueAnswer, queueRequest } from "../src/engine/inbox.ts";
 import { Run } from "../src/engine/run.ts";
 import type { DriverTask } from "../src/engine/types.ts";
 import { type Config, defaults } from "../src/workflows/code-review/config.ts";
-import type { Data } from "../src/workflows/code-review/data.ts";
+import { addFinding, type Data } from "../src/workflows/code-review/data.ts";
 import { codeReview } from "../src/workflows/code-review/workflow.ts";
 import { FakeDriver, type FakeTurn, newRun, scratchRepo, sh } from "./helpers.ts";
 
@@ -117,7 +117,7 @@ test("code-review: review, gated fixes, failover, deferral, organize, then a hum
   assert.equal(driver.turns.length, turnsBefore);
 
   // A human picks option 1: the next round fixes it, reviews the change, and converges again.
-  answer(run.state, "P2", "1");
+  queueAnswer(run.state.runDir, run.state, "P2", "1");
   assert.equal(await new Run(run.state, { driver, log: (l) => lines.push(l) }).execute(codeReview), "converged", lines.join("\n"));
   assert.equal(byId("P2").status, "fixed");
   assert.match(readFileSync(join(wt, "c/d.go"), "utf8"), /merged/);
@@ -239,4 +239,35 @@ test("code-review: an audit that could not read every file is unaudited; resumin
   auditClean = true;
   assert.equal(await new Run(run.state, { driver, log: () => {} }).execute(codeReview), "converged");
   assert.deepEqual(run.data.audits.map((a) => a.verdict), ["incomplete", "pass"]);
+});
+
+test("code-review: an answer or request that arrives during a fix runs before the next fix", async () => {
+  const repo = scratchRepo();
+  let wt = "";
+  let run: Run<Data, Config> | undefined;
+  const driver: FakeDriver = new FakeDriver((task): FakeTurn | undefined => {
+    if (task.key === "r1/fix/R1/1") {
+      appendFileSync(join(wt, "a.go"), "// first\n");
+      // Stands in for `magi request` run from another terminal while this fix is running.
+      queueRequest(run!.state.runDir, "Add a header to b.go");
+      return { submit: fixed("Fix the first finding") };
+    }
+    if (task.key === "r1/fix/Q1/1") {
+      appendFileSync(join(wt, "b.go"), "// header\n");
+      return { submit: fixed("Add a header to b.go") };
+    }
+    if (task.key === "r1/fix/R2/1") {
+      appendFileSync(join(wt, "c/d.go"), "// second\n");
+      return { submit: fixed("Fix the second finding") };
+    }
+    const q = quiet(task, wt);
+    if (q) return q;
+    throw new Error(`unexpected step ${task.key}`);
+  });
+  run = newRun(codeReview, config(repo, { reviewers: 1, shardLines: 1000, patterns: false, organize: false, audits: 0 }), repo, driver);
+  wt = run.state.target.worktree;
+  addFinding(run.data, { kind: "issue", round: 0, foundBy: "m/x", title: "First", severity: "important", sites: site("a.go"), details: {} });
+  addFinding(run.data, { kind: "issue", round: 0, foundBy: "m/x", title: "Second", severity: "important", sites: site("c/d.go"), details: {} });
+  assert.equal(await run.execute(codeReview), "converged");
+  assert.deepEqual(driver.turns.filter((t) => t.key.includes("/fix/")).map((t) => t.key), ["r1/fix/R1/1", "r1/fix/Q1/1", "r1/fix/R2/1"]);
 });

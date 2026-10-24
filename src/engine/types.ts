@@ -39,6 +39,8 @@ export interface Driver {
   start(task: DriverTask): Promise<Turn>;
   /** Continue the same conversation with a follow-up message. */
   resume(task: DriverTask, session: string, message: string): Promise<Turn>;
+  /** Stop the turn running for a task key; that turn then returns with an error. */
+  abort(key: string): Promise<void>;
   /** Release a conversation the engine is done with. */
   close(session: string): void;
   abortAll(): Promise<void>;
@@ -61,6 +63,8 @@ export interface AgentCall<T extends TSchema> {
    */
   verify?: (output: Static<T>) => string | undefined;
   maxRepairs?: number;
+  /** Wall-clock limit for one attempt, repairs included. When it passes, the attempt is aborted and counts as failed. */
+  timeoutMin?: number;
 }
 
 export interface AgentOutcome<T> {
@@ -77,6 +81,9 @@ export interface AgentOutcome<T> {
   /** Cost of all attempts. */
   cost: number;
 }
+
+/** The transcript page of an agent session, relative to the report page; undefined when there is none. */
+export type SessionLink = (session: string) => string | undefined;
 
 export interface Option { label: string; consequences: string }
 
@@ -149,6 +156,8 @@ export interface Workflow<D, C> {
   run(ctx: Ctx<D, C>): Promise<Outcome>;
   /** Workflow-specific sections for summary.md. */
   report(state: RunState<D, C>): string;
+  /** Workflow-specific HTML for the run page: a fragment of <section>s. link() gives a session's transcript, if exported. */
+  html?(state: RunState<D, C>, link: SessionLink): string;
 }
 
 // ---- persisted run state ----
@@ -193,5 +202,7 @@ export interface RunState<D = unknown, C = unknown> {
   agents: AgentRecord[];
   questions: Question[];
   requests: Request[];
+  /** Inbox entries already applied to this state. */
+  inboxRead: number;
   data: D;
 }

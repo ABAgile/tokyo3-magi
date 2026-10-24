@@ -15,6 +15,7 @@ import { organizeHistory } from "../../kit/organize.ts";
 import { type Config, defaults, options } from "./config.ts";
 import { addFinding, type AuditRun, type AuditVerdict, type Data, findById, type Finding, initData, markVisited, openFindings, roundInfo } from "./data.ts";
 import { auditPrompt, findingText, fixPrompt, patternPrompt, reviewPrompt } from "./prompts.ts";
+import { reportHtml } from "./html.ts";
 import { report } from "./report.ts";
 import { PatternSchema, type Resolution, ResolutionSchema, ReviewSchema } from "./schemas.ts";
 
@@ -27,6 +28,7 @@ export const codeReview: Workflow<Data, Config> = {
   options,
   init: initData,
   report,
+  html: reportHtml,
 
   async run(ctx) {
     await baseline(ctx);
@@ -190,8 +192,10 @@ const rank = (f: Finding): number =>
   f.decision ? 0 : f.kind === "request" ? 1 : f.severity === "critical" ? 2 : f.kind === "issue" ? 3 : 4;
 
 async function fixOpenFindings(ctx: C, n: number): Promise<void> {
-  // Pick again after every fix: one fix can settle other findings through also_resolves.
+  // Pick again after every fix: one fix can settle other findings through also_resolves, and an answer or request
+  // that arrived during the last fix is taken in here, so it runs before the next fix.
   for (;;) {
+    takeHumanInput(ctx);
     const next = openFindings(ctx.data).sort((a, b) => rank(a) - rank(b) || seq(a) - seq(b))[0];
     if (!next) return;
     await fix(ctx, n, next);
@@ -219,7 +223,7 @@ async function fix(ctx: C, n: number, f: Finding): Promise<void> {
     let gateOpened = false;
     const failedModels = f.attempts.filter((a) => a.outcome === "failed").map((a) => a.model);
     const outcome = await ctx.agent({
-      key, write: true, result: ResolutionSchema, maxRepairs: 4,
+      key, write: true, result: ResolutionSchema, maxRepairs: 4, timeoutMin: cfg.fixTimeoutMin,
       models: rotation(cfg.models.fix, 0, [f.foundBy, ...failedModels]).slice(0, cfg.fixTries),
       prompt: (failures) => fixPrompt({ finding: f, check: ctx.data.checkGate ? cfg.check : "", open: openFindings(ctx.data), failures }),
       // The check gate: a fixed result that fails the check goes back to the same fixer with the output.

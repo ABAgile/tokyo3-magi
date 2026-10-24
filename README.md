@@ -56,10 +56,15 @@ such as breaking a public API or choosing between real tradeoffs, the loop does 
 **question** with the context, the options, their consequences, and a recommendation, then carries on with
 other work. You answer whenever you like:
 
-- pick an option, or give your own instruction, and the next round carries it out;
+- pick an option, or give your own instruction, and the loop carries it out;
 - skip it, and later runs on that repository are told not to raise it again.
 
 You can also send a **request**, a change you want made, which the loop handles like any other task.
+
+Answers and requests can be sent at any time, including while a run is busy. They are written to the run's
+inbox, and the loop takes them in right after the fix it is working on, so they run before the next fix. If
+the run is stopped, they take effect at once, and `magi resume` acts on them. The loop never has its state
+overwritten by a command you run.
 
 ### How a loop runs
 
@@ -94,8 +99,9 @@ Each round has two parts:
 
 1. **Fix.** Every open finding is handled on its own, one after another. A fixer verifies it, then fixes,
    rejects, marks it a duplicate, or defers it to a human. Fixers start with the cheapest model and move up to
-   a stronger one only when an attempt fails. A fix counts only if the project's check passes (for Go: build,
-   vet, test). Each fix becomes one commit.
+   a stronger one only when an attempt fails. Each attempt has a time limit (`fixTimeoutMin`, default 20
+   minutes, repairs included); an attempt that runs past it is stopped and counts as failed. A fix counts only
+   if the project's check passes (for Go: build, vet, test). Each fix becomes one commit.
 2. **Review.** Running in parallel:
    - **Reviewers** read files no one has read yet, plus everything that changed since the last review.
      Every defect is reported with every place it occurs, so it is fixed everywhere at once.
@@ -167,7 +173,8 @@ path stays the same in every environment you run magi from, such as your dev con
 ```sh
 magi run code-review ./vault              # start; prints the run directory
 magi status <run dir>                     # where it stands: rounds, findings, cost
-magi decide <run dir>                     # answer open questions, one by one
+magi report <run dir>                     # an HTML page for reading: timeline, findings, commits, transcripts
+magi decide <run dir>                     # answer open questions, one by one (works while a run is busy)
 magi request <run dir> "make X do Y"      # ask for a change
 magi resume <run dir>                     # continue: after answers, requests, or an interruption
 magi resume <run dir> --max-rounds 10     # allow more review rounds
@@ -182,7 +189,9 @@ A `<run dir>` can be given as a path, or by the short name `magi list` shows, su
 A typical cycle:
 
 1. **Start** a run and let it work. Progress is printed as it goes.
-2. **Read** `summary.md` in the run directory: what was found, what was fixed, what it cost.
+2. **Read** `summary.md` in the run directory: what was found, what was fixed, what it cost. For a longer
+   read, `magi report` writes `report/index.html` with a timeline, every finding with its attempts, each
+   commit's diff, and a transcript of every agent session. Open it through a browser; it needs no server.
 3. **Decide** on whatever is in `outstanding.md`, or leave it for later.
 4. **Resume.** The loop applies your answers, reviews the result, and converges again.
 5. **Review and merge** the run's branch (`magi-<workflow>-<timestamp>` in the target repository) the way

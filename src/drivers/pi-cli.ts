@@ -15,7 +15,7 @@ const EXTENSION = fileURLToPath(new URL("./pi-submit.ts", import.meta.url));
 export class PiCliDriver implements Driver {
   readonly name = "pi-cli";
   readonly #bin: string;
-  readonly #running = new Set<ChildProcess>();
+  readonly #running = new Map<string, ChildProcess>();
 
   constructor(bin = process.env.MAGI_PI_BIN ?? "pi") {
     this.#bin = bin;
@@ -36,8 +36,12 @@ export class PiCliDriver implements Driver {
 
   close(): void {}
 
+  async abort(key: string): Promise<void> {
+    this.#running.get(key)?.kill("SIGTERM");
+  }
+
   async abortAll(): Promise<void> {
-    for (const child of this.#running) child.kill("SIGTERM");
+    for (const child of this.#running.values()) child.kill("SIGTERM");
   }
 
   #exec(task: DriverTask, sessionArgs: string[], message: string): Promise<Turn> {
@@ -50,7 +54,7 @@ export class PiCliDriver implements Driver {
       env: { ...process.env, MAGI_RESULT_FILE: task.resultFile, MAGI_RESULT_SCHEMA: schemaFile },
       stdio: ["ignore", "pipe", "pipe"],
     });
-    this.#running.add(child);
+    this.#running.set(task.key, child);
     const turn: Turn = { cost: 0, reads: [], commands: [] };
     let sessionId = "";
     let lastAssistant: { stopReason?: string; errorMessage?: string } | undefined;
@@ -73,7 +77,7 @@ export class PiCliDriver implements Driver {
     });
     return new Promise((done) => {
       child.on("close", (code) => {
-        this.#running.delete(child);
+        this.#running.delete(task.key);
         turn.session = sessionArgs[0] === "--session" ? sessionArgs[1] : findSession(task.sessionDir, sessionId);
         if (code !== 0) turn.error = `pi exited with ${code}: ${stderr.trim().split("\n").slice(-3).join(" ")}`;
         else if (!lastAssistant) turn.error = "the model produced no reply";

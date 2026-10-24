@@ -4,12 +4,15 @@ import { dirname, join } from "node:path";
 import type { Static, TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { git, head, isDirty, resetTo } from "./git.ts";
-import { readLedger } from "./inbox.ts";
+import { applyInbox, readLedger } from "./inbox.ts";
 import type {
-  AgentCall, AgentOutcome, AgentRecord, Ctx, Driver, DriverTask, Outcome, Question, RunState, SkipRecord, Workflow,
+  AgentCall, AgentOutcome, AgentRecord, Ctx, Driver, DriverTask, Outcome, Question, RunState, SkipRecord, Turn, Workflow,
 } from "./types.ts";
 
 export const now = (): string => new Date().toISOString();
+
+/** When an attempt must end: its deadline, and the limit it was given, for the message. */
+type Limit = { deadline: number; minutes: number };
 export const stateFile = (runDir: string): string => join(runDir, "state.json");
 const firstLine = (s: string): string => s.split("\n")[0];
 
@@ -133,7 +136,8 @@ export class Run<D, C> implements Ctx<D, C> {
       this.save();
       this.log(`start ${call.key} (${model})`);
 
-      const attempt = await this.#converse(task, call, record);
+      const limit = call.timeoutMin ? { deadline: Date.now() + call.timeoutMin * 60_000, minutes: call.timeoutMin } : undefined;
+      const attempt = await this.#converse(task, call, record, limit);
       out.cost += record.cost;
       if (record.session) out.sessions.push(record.session);
       record.finishedAt = now();
@@ -156,10 +160,10 @@ export class Run<D, C> implements Ctx<D, C> {
   }
 
   /** Talk to one model until it submits an acceptable result, or gives up. */
-  async #converse<T extends TSchema>(task: DriverTask, call: AgentCall<T>, record: AgentRecord) {
+  async #converse<T extends TSchema>(task: DriverTask, call: AgentCall<T>, record: AgentRecord, limit?: Limit) {
     const reads: string[] = [];
     const commands: string[] = [];
-    let turn = await this.#driver.start(task);
+    let turn = await this.#turn(task, () => this.#driver.start(task), limit);
     try {
       for (let repairs = 0; ; repairs++) {
         record.turns++;
@@ -174,11 +178,31 @@ export class Run<D, C> implements Ctx<D, C> {
         if (!turn.session) return { error: checked.problem };
         this.log(`${call.key}: result not accepted, asking ${task.model} to repair it: ${firstLine(checked.problem)}`);
         rmSync(task.resultFile, { force: true });
-        turn = await this.#driver.resume(task, turn.session, `Your result was not accepted: ${checked.problem}\n\n${this.#driver.submitHint(task)}`);
+        const message = `Your result was not accepted: ${checked.problem}\n\n${this.#driver.submitHint(task)}`;
+        const session = turn.session;
+        turn = await this.#turn(task, () => this.#driver.resume(task, session, message), limit);
       }
     } finally {
       if (record.session) this.#driver.close(record.session);
     }
+  }
+
+  /** One driver turn. If the attempt's limit passes during it, the driver is told to abort and the turn fails. */
+  async #turn(task: DriverTask, work: () => Promise<Turn>, limit?: Limit): Promise<Turn> {
+    if (!limit) return work();
+    const expired = (): Turn => ({ cost: 0, reads: [], commands: [], error: `timed out after ${limit.minutes} min` });
+    const left = limit.deadline - Date.now();
+    if (left <= 0) return expired();
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), left);
+    });
+    const running = work();
+    const first = await Promise.race([running, timeout]);
+    clearTimeout(timer);
+    if (first !== "timeout") return first;
+    await this.#driver.abort(task.key).catch(() => {});
+    return { ...(await running), error: expired().error };
   }
 
   #accept<T extends TSchema>(task: DriverTask, call: AgentCall<T>): { output: Static<T> } | { problem: string } {
@@ -203,11 +227,18 @@ export class Run<D, C> implements Ctx<D, C> {
     this.save();
   }
 
+  /** Fold in the inbox first, so answers and requests queued by `magi decide` or `magi request` are seen. */
+  #absorb(): void {
+    if (applyInbox(this.state.runDir, this.state as RunState)) this.save();
+  }
+
   answers(): Question[] {
+    this.#absorb();
     return this.state.questions.filter((q) => q.answer && !q.consumed);
   }
 
   requests() {
+    this.#absorb();
     return this.state.requests.filter((r) => !r.consumed);
   }
 

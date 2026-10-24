@@ -41,7 +41,7 @@ function outstanding(s: RunState, cli: string): string {
   const out = [`# Outstanding decisions (${items.length})`, ""];
   if (items.length) {
     out.push(
-      "Answer interactively or one at a time, then resume to act on the answers:",
+      "Answer interactively or one at a time. An active run takes answers in after its current fix; a stopped run\nrecords them at once, and `resume` acts on them:",
       "",
       `    ${cli} decide ${s.runDir}`,
       `    ${cli} decide ${s.runDir} <ID> "<option number or instruction>"`,

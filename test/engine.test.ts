@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 import { join } from "node:path";
 import { test } from "node:test";
 import { Type } from "typebox";
-import { answer } from "../src/engine/inbox.ts";
+import { queueAnswer } from "../src/engine/inbox.ts";
 import { Run } from "../src/engine/run.ts";
 import type { Workflow } from "../src/engine/types.ts";
 import { FakeDriver, newRun, scratchRepo, sh } from "./helpers.ts";
@@ -91,14 +91,26 @@ test("resume discards what an interrupted step left, then runs it again", async 
   assert.equal(sh(wt, "status", "--porcelain"), "");
 });
 
-test("answers: option numbers, instructions, and skips that reach the ledger", () => {
+test("answers: option numbers and skips are queued, then applied when the run reads its inbox", () => {
   const run = newRun(noop, {}, scratchRepo(), new FakeDriver(() => {}));
   const q = { title: "Merge handlers", detail: "b.go and d.go", question: "Merge?", options: [{ label: "merge", consequences: "c" }, { label: "keep", consequences: "c" }], recommendation: "merge", sessions: [] };
   run.ask({ id: "P1", ...q });
   run.ask({ id: "P2", ...q });
-  answer(run.state, "P1", "1");
-  answer(run.state, "P2", "skip: public API");
+  run.ask({ id: "P3", ...q });
+  assert.throws(() => queueAnswer(run.state.runDir, run.state, "P3", "7"), /no option 7/);
+  queueAnswer(run.state.runDir, run.state, "P1", "1");
+  queueAnswer(run.state.runDir, run.state, "P2", "skip: public API");
+  assert.throws(() => queueAnswer(run.state.runDir, run.state, "P1", "2"), /waiting to be applied/);
   assert.deepEqual(run.answers().map((x) => [x.id, x.answer?.text, x.answer?.skip]), [["P1", "Option 1: merge", false], ["P2", "public API", true]]);
   assert.equal(run.skipped()[0].title, "Merge handlers");
-  assert.throws(() => answer(run.state, "P1", "7"), /no option 7/);
+  assert.throws(() => queueAnswer(run.state.runDir, run.state, "P1", "2"), /already answered/);
+});
+
+test("agent: an attempt that runs past its time limit is aborted, and the next model takes over", async () => {
+  const driver = new FakeDriver((task) => (task.model === "m/hang" ? { hang: true } : { submit: { answer: 1 } }));
+  const run = newRun(noop, {}, scratchRepo(), driver);
+  const out = await run.agent({ key: "k", models: ["m/hang", "m/good"], write: false, result: Result, prompt: () => "go", timeoutMin: 0.001 });
+  assert.equal(out.model, "m/good");
+  assert.equal(out.output?.answer, 1);
+  assert.match(out.failures[0].reason, /timed out after 0\.001 min/);
 });

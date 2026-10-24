@@ -28,6 +28,8 @@ export function scratchRepo(): string {
 export interface FakeTurn {
   /** Written to the result file, as a submit tool would. */
   submit?: unknown;
+  /** Never answers; the turn ends only when the engine aborts it. */
+  hang?: boolean;
   error?: string;
   reads?: string[];
   commands?: string[];
@@ -41,6 +43,7 @@ export class FakeDriver implements Driver {
   readonly turns: { key: string; model: string; turn: number; message: string }[] = [];
   readonly closed: string[] = [];
   readonly #script: Script;
+  readonly #stops = new Map<string, () => void>();
   #next = 0;
   readonly #conversations = new Map<string, number>();
 
@@ -67,12 +70,22 @@ export class FakeDriver implements Driver {
     this.#conversations.set(session, turn);
     this.turns.push({ key: task.key, model: task.model, turn, message });
     const r = (await this.#script(task, message, turn)) ?? {};
+    if (r.hang) {
+      // Stands in for a model that never answers, until the engine aborts it.
+      await new Promise<void>((resolve) => this.#stops.set(task.key, resolve));
+      return { session, cost: 0, reads: [], commands: [], error: "aborted" };
+    }
     if (r.submit !== undefined) writeFileSync(task.resultFile, JSON.stringify(r.submit));
     return { session, cost: 0.01, reads: r.reads ?? [], commands: r.commands ?? [], error: r.error };
   }
 
   close(session: string): void {
     this.closed.push(session);
+  }
+
+  async abort(key: string): Promise<void> {
+    this.#stops.get(key)?.();
+    this.#stops.delete(key);
   }
 
   async abortAll(): Promise<void> {}

@@ -37,22 +37,36 @@ export function createRunState<C>(o: NewRun<C>): RunState<unknown, C> {
     version: 2, workflow: o.workflow.name, id, runDir, createdAt: now(), driver: o.driver, config: o.config, status: "running",
     ledger: join(resolve(o.runsRoot), basename(repo), "skipped.json"),
     target: { repo, sub, base: git(repo, ["rev-parse", "HEAD"]).trim(), branch, worktree },
-    journal: {}, pending: {}, agents: [], questions: [], requests: [], data: o.workflow.init(o.config),
+    journal: {}, pending: {}, agents: [], questions: [], requests: [], inboxRead: 0, data: o.workflow.init(o.config),
   };
 }
 
-/** Take the run's lock; returns the release function. */
-export function lock(runDir: string): () => void {
+/** The live process holding the run's lock, other than this one. */
+function holder(runDir: string): number | undefined {
   const file = join(runDir, "lock");
-  if (existsSync(file)) {
-    const pid = Number(readFileSync(file, "utf8"));
-    let alive = false;
-    try {
-      process.kill(pid, 0);
-      alive = true;
-    } catch {}
-    if (alive && pid !== process.pid) throw new Error(`the run is in use by process ${pid}`);
+  if (!existsSync(file)) return undefined;
+  const pid = Number(readFileSync(file, "utf8"));
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return undefined;
   }
-  writeFileSync(file, String(process.pid));
-  return () => rmSync(file, { force: true });
+  return pid !== process.pid ? pid : undefined;
+}
+
+function take(runDir: string): () => void {
+  writeFileSync(join(runDir, "lock"), String(process.pid));
+  return () => rmSync(join(runDir, "lock"), { force: true });
+}
+
+/** Take the run's lock; returns the release function. Throws when another live process has it. */
+export function lock(runDir: string): () => void {
+  const pid = holder(runDir);
+  if (pid !== undefined) throw new Error(`the run is in use by process ${pid}`);
+  return take(runDir);
+}
+
+/** Take the run's lock if it is free; undefined while a loop is running on the run. */
+export function tryLock(runDir: string): (() => void) | undefined {
+  return holder(runDir) === undefined ? take(runDir) : undefined;
 }
