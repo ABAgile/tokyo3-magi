@@ -82,6 +82,14 @@ export interface AgentOutcome<T> {
   cost: number;
 }
 
+/** A figure on the executive summary. */
+export interface SummaryMetric { label: string; value: string; tone?: "good" | "warn" | "bad" | "info"; note?: string }
+/** A point for the reader: text, and the anchor of what it is about, when there is one. `html` replaces the text when it needs markup. */
+export interface SummaryPoint { text: string; href?: string; html?: string }
+/** What a reader needs first: one headline, the figures in rows, and the points that matter. */
+/** `lists` are shown after the points, each under its own title. */
+export interface RunSummary { headline: string; metrics: SummaryMetric[][]; points: SummaryPoint[]; lists?: { title: string; points: SummaryPoint[] }[] }
+
 /** The transcript page of an agent session, relative to the report page; undefined when there is none. */
 export type SessionLink = (session: string) => string | undefined;
 
@@ -157,6 +165,11 @@ export interface Workflow<D, C> {
   /** Workflow-specific sections for summary.md. */
   report(state: RunState<D, C>): string;
   /** Workflow-specific HTML for the run page: a fragment of <section>s. link() gives a session's transcript, if exported. */
+  /** The executive summary at the top of the run page. */
+  executive?(state: RunState<D, C>): RunSummary;
+  /** The commit a model call's changes became, if any; the run page links the call to that commit. */
+  callCommit?(state: RunState<D, C>, call: AgentRecord): string | undefined;
+  /** Workflow-specific sections of the run page, as <section>s (see section() in engine/html.ts). */
   html?(state: RunState<D, C>, link: SessionLink): string;
 }
 

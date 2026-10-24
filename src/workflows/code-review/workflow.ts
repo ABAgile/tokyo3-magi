@@ -15,7 +15,7 @@ import { organizeHistory } from "../../kit/organize.ts";
 import { type Config, defaults, options } from "./config.ts";
 import { addFinding, type AuditRun, type AuditVerdict, type Data, findById, type Finding, initData, markVisited, openFindings, roundInfo } from "./data.ts";
 import { auditPrompt, findingText, fixPrompt, patternPrompt, reviewPrompt } from "./prompts.ts";
-import { reportHtml } from "./html.ts";
+import { callCommit, executive, reportHtml } from "./html.ts";
 import { report } from "./report.ts";
 import { PatternSchema, type Resolution, ResolutionSchema, ReviewSchema } from "./schemas.ts";
 
@@ -28,6 +28,8 @@ export const codeReview: Workflow<Data, Config> = {
   options,
   init: initData,
   report,
+  executive,
+  callCommit,
   html: reportHtml,
 
   async run(ctx) {
@@ -137,7 +139,7 @@ async function auditShard(ctx: C, run: AuditRun, j: number, shard: string[]): Pr
     run.unread.push(...r.notCovered);
     for (const x of r.findings) {
       const f = addFinding(ctx.data, {
-        kind: "issue", round: run.after, foundBy: r.model, title: x.title, severity: x.severity, sites: x.sites,
+        kind: "issue", round: run.after, foundBy: r.model, step: key, title: x.title, severity: x.severity, sites: x.sites,
         details: { impact: x.impact, reasoning: x.reasoning, fix: x.fix },
       });
       run.reported.push(f.id);
@@ -359,7 +361,7 @@ async function reviewer(ctx: C, n: number, k: number, shard: string[], models: s
     markVisited(ctx.data, r.read);
     for (const x of r.findings) {
       reported(ctx, n, addFinding(ctx.data, {
-        kind: "issue", round: n, foundBy: r.model, title: x.title, severity: x.severity, sites: x.sites,
+        kind: "issue", round: n, foundBy: r.model, step: key, title: x.title, severity: x.severity, sites: x.sites,
         details: { impact: x.impact, reasoning: x.reasoning, fix: x.fix },
       }));
     }
@@ -384,7 +386,7 @@ async function patternScan(ctx: C, n: number, files: number, avoid: string[]): P
     markVisited(ctx.data, r.read);
     for (const p of r.patterns) {
       const f = addFinding(ctx.data, {
-        kind: "pattern", round: n, foundBy: r.model, title: p.title, severity: "important", change: p.change, sites: p.sites,
+        kind: "pattern", round: n, foundBy: r.model, step: key, title: p.title, severity: "important", change: p.change, sites: p.sites,
         details: { pattern: p.pattern, interface: p.interface, migration: p.migration, payoff: p.payoff },
       });
       // A pattern that needs a decision goes straight to a human; a fixer would only defer it again.

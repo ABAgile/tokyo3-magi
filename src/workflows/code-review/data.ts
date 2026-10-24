@@ -24,6 +24,8 @@ export interface Finding {
   kind: Kind;
   round: number;
   foundBy: string;
+  /** The step that reported it, e.g. "r2/review/1", so the page can link to that agent's transcript. */
+  step?: string;
   title: string;
   severity: "critical" | "important";
   /** Patterns only: whether it can be applied without a human decision. */
