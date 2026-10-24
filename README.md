@@ -173,7 +173,7 @@ path stays the same in every environment you run magi from, such as your dev con
 ```sh
 magi run code-review ./vault              # start; prints the run directory
 magi status <run dir>                     # where it stands: rounds, findings, cost
-magi report <run dir>                     # an HTML page: summary first, then rounds, findings, and details
+magi report <run dir> [--no-summary]      # an HTML page: summary first, then rounds, findings, and details
 magi decide <run dir>                     # answer open questions, one by one (works while a run is busy)
 magi request <run dir> "make X do Y"      # ask for a change
 magi resume <run dir>                     # continue: after answers, requests, or an interruption
@@ -190,10 +190,14 @@ A typical cycle:
 
 1. **Start** a run and let it work. Progress is printed as it goes.
 2. **Read** `summary.md` in the run directory: what was found, what was fixed, what it cost. For a longer
-   read, `magi report` writes `report/index.html`. It opens with an executive summary, then the rounds, the
-   findings (filterable by status and severity), the decisions, and the commits. Each layer is collapsed
-   until you open it. Transcripts and commit diffs open in their own window. The mechanics (timing and cost
-   of every call) are at the end. Open it in a browser; it needs no server.
+   read, `magi report` writes `report/index.html`. It opens with an executive summary: the figures and the
+   important findings come from the run's data, and an agent writes where the project stands and groups the
+   fixed findings by kind of defect. The agent runs only when the run's facts have changed since the last
+   report, and never while a loop is running on the run; `--no-summary` reuses the last summary instead. Then
+   come the rounds, the findings (filterable by status and severity), the decisions, and the commits. Each
+   layer is collapsed until you open it. Transcripts and commit diffs open in their own window. The mechanics
+   (timing and cost of every call, including the summary's) are at the end. Open it in a browser; it needs no
+   server. The summary's model role is `summary` (`--summary-models`).
 3. **Decide** on whatever is in `outstanding.md`, or leave it for later.
 4. **Resume.** The loop applies your answers, reviews the result, and converges again.
 5. **Review and merge** the run's branch (`magi-<workflow>-<timestamp>` in the target repository) the way

@@ -90,6 +90,17 @@ export interface SummaryPoint { text: string; href?: string; html?: string }
 /** `lists` are shown after the points, each under its own title. */
 export interface RunSummary { headline: string; metrics: SummaryMetric[][]; points: SummaryPoint[]; lists?: { title: string; points: SummaryPoint[] }[] }
 
+/** Prose an agent wrote for the run page, from the run's facts. The page shows it beside the figures and lists. */
+export interface Narrative {
+  /** Where the work stands, in short points. */
+  state: string[];
+  /** The fixed findings, grouped by kind of defect. */
+  categories: { title: string; summary: string; ids: string[] }[];
+  /** The model that wrote it, and when. */
+  model: string;
+  at: string;
+}
+
 /** The transcript page of an agent session, relative to the report page; undefined when there is none. */
 export type SessionLink = (session: string) => string | undefined;
 
@@ -167,6 +178,8 @@ export interface Workflow<D, C> {
   /** Workflow-specific HTML for the run page: a fragment of <section>s. link() gives a session's transcript, if exported. */
   /** The executive summary at the top of the run page. */
   executive?(state: RunState<D, C>): RunSummary;
+  /** Prose for the run page, written by an agent from the run's facts. `magi report` calls it; undefined when none could be written. */
+  narrate?(ctx: Ctx<D, C>): Promise<Narrative | undefined>;
   /** The commit a model call's changes became, if any; the run page links the call to that commit. */
   callCommit?(state: RunState<D, C>, call: AgentRecord): string | undefined;
   /** Workflow-specific sections of the run page, as <section>s (see section() in engine/html.ts). */

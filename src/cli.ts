@@ -6,10 +6,11 @@ import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
 import { createDriver, drivers } from "./drivers/index.ts";
 import { answerInteractively, applyInbox, queueAnswer, queueRequest } from "./engine/inbox.ts";
 import { writeHtmlReport } from "./engine/html.ts";
+import { readNarrative } from "./engine/narrative.ts";
 import { writeReports } from "./engine/report.ts";
 import { loadState, Run, saveState } from "./engine/run.ts";
 import { cleanRun, findRunDir, formatRuns, runsOfRepo, runsUnder, summarize } from "./engine/runs.ts";
-import type { RunState, Workflow } from "./engine/types.ts";
+import type { Narrative, RunState, Workflow } from "./engine/types.ts";
 import { createRunState, lock, tryLock } from "./engine/workspace.ts";
 import { describeSettings, DEFAULT_DRIVER, initSettings, loadSettings, resolveRunsRoot, workflowConfig } from "./settings.ts";
 import { workflows } from "./workflows/index.ts";
@@ -26,8 +27,11 @@ const USAGE = `magi: agent loops that iterate until the work converges.
   magi decide <run dir> <ID> <answer>   answer one: an option number, an instruction, or "skip: <reason>"
   magi request <run dir> <text>         ask for a change; resume the run to apply it
   magi status <run dir>                 print the summary
-  magi report <run dir> [--no-sessions] write report/index.html: timeline, findings, commits, and a
-                                        transcript of each agent session (--no-sessions skips transcripts)
+  magi report <run dir> [--no-sessions] [--no-summary]
+                                        write report/index.html: summary, rounds, findings, commits, and a
+                                        transcript of each agent session (--no-sessions skips transcripts).
+                                        An agent writes the summary's prose when the run changed; --no-summary
+                                        skips that call and reuses the last summary
   magi list [<dir>]                     list runs: all of them, or those on the repository at <dir>
   magi clean <run dir>... [--force]     remove runs: worktree, run directory, and their branches if merged;
                                         --force also deletes unmerged branches and uncommitted changes
@@ -55,6 +59,7 @@ const COMMON = {
   "runs-dir": { type: "string" },
   force: { type: "boolean" },
   "no-sessions": { type: "boolean" },
+  "no-summary": { type: "boolean" },
   help: { type: "boolean", short: "h" },
 } satisfies ParseArgsOptionsConfig;
 
@@ -109,6 +114,32 @@ function applyWhenIdle(runDir: string, workflow: Workflow<any, any>): boolean {
   }
 }
 
+/**
+ * The summary for the report. An agent writes it when the run's facts changed and no loop is running on the run;
+ * otherwise, or with skipAgent, the last summary written is used.
+ */
+async function narrativeFor(runDir: string, workflow: Workflow<any, any>, skipAgent: boolean): Promise<Narrative | undefined> {
+  const last = () => readNarrative(runDir)?.narrative;
+  if (!workflow.narrate || skipAgent) return last();
+  const unlock = tryLock(runDir);
+  if (!unlock) {
+    console.error("The run is active, so its summary is not rewritten; the last one is shown.");
+    return last();
+  }
+  try {
+    const state = loadState(runDir);
+    const run = new Run(state, { driver: createDriver(state.driver), onSave: () => {} });
+    const narrative = await workflow.narrate(run);
+    if (!narrative) console.error("The summary could not be written; the last one is shown.");
+    return narrative ?? last();
+  } catch (err) {
+    console.error(`The summary could not be written (${err instanceof Error ? err.message : String(err)}); the last one is shown.`);
+    return last();
+  } finally {
+    unlock();
+  }
+}
+
 async function drive(state: RunState, workflow: Workflow<any, any>): Promise<number> {
   const unlock = lock(state.runDir);
   const driver = createDriver(state.driver);
@@ -151,6 +182,7 @@ async function main(argv: string[]): Promise<number> {
   }
   if (values.force && command !== "clean") throw new Error("--force is only for magi clean");
   if (values["no-sessions"] && command !== "report") throw new Error("--no-sessions is only for magi report");
+  if (values["no-summary"] && command !== "report") throw new Error("--no-summary is only for magi report");
   if (command === "list") {
     const root = runsRoot(values);
     console.log(formatRuns((arg ? runsOfRepo(arg, root) : runsUnder(root)).map(summarize), root));
@@ -213,7 +245,10 @@ async function main(argv: string[]): Promise<number> {
     }
     case "report": {
       const r = open(arg, values);
-      console.log(writeHtmlReport(r.state, r.workflow, { sessions: values["no-sessions"] !== true, pi: process.env.MAGI_PI_BIN ?? "pi" }));
+      const narrative = await narrativeFor(r.state.runDir, r.workflow, values["no-summary"] === true);
+      // Reloaded: writing the summary records its agent call in the run's state.
+      const state = loadState(r.state.runDir);
+      console.log(writeHtmlReport(state, r.workflow, { sessions: values["no-sessions"] !== true, pi: process.env.MAGI_PI_BIN ?? "pi", narrative }));
       return 0;
     }
     case "status": {

@@ -107,3 +107,16 @@ export function fixPrompt(o: { finding: Finding; check: string; open: Finding[];
 Only edit files inside the working directory; anything outside it is a read-only reference.`);
   return parts.join("\n\n");
 }
+
+export function narrativePrompt(facts: string): string {
+  return `Summarize this automated code review run for the person who will decide what to do next. Use only the facts below. Do not add findings, files, or outcomes that are not listed.
+
+Write two things:
+- state: two to five short points on where the project stands. Say what is settled, what is not verified yet (for example, fixes made after the last review, no audit, files not read), and what a person must decide or do. Do not repeat counts or figures; they are shown next to your text.
+- categories: group every finding whose status is fixed by kind of defect, such as session revocation or audit ordering. Put behavior-preserving consolidations (kind pattern) in their own categories. Each fixed finding appears in exactly one category, and only fixed findings appear. Each category has a title of two to five words, one sentence on what was wrong and what the fixes changed, and the IDs of its findings.
+
+Work without asking questions. Do not read or edit files; everything you need is below.
+
+Facts:
+${facts}`;
+}

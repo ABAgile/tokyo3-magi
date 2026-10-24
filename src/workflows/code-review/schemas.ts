@@ -60,3 +60,19 @@ export const ResolutionSchema = Type.Object({
   recommendation: Type.Optional(Type.String({ description: "deferred: the option you would pick, and why" })),
 });
 export type Resolution = Static<typeof ResolutionSchema>;
+
+export const NarrativeSchema = Type.Object({
+  state: Type.Array(Type.String({ description: "One short point" }), {
+    minItems: 1, maxItems: 5,
+    description: "Where the project stands: what is settled, what is not verified yet, what a person must decide or do. No counts or figures.",
+  }),
+  categories: Type.Array(
+    Type.Object({
+      title: Type.String({ maxLength: 60, description: "Two to five words naming a kind of defect" }),
+      summary: Type.String({ description: "One sentence: what was wrong, and what the fixes changed" }),
+      ids: Type.Array(Type.String(), { minItems: 1, description: "IDs of the fixed findings in this category" }),
+    }),
+    { description: "The fixed findings grouped by kind of defect; each fixed finding appears in exactly one category" },
+  ),
+});
+export type NarrativeResult = Static<typeof NarrativeSchema>;

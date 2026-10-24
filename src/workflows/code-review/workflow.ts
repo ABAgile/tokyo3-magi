@@ -15,6 +15,7 @@ import { organizeHistory } from "../../kit/organize.ts";
 import { type Config, defaults, options } from "./config.ts";
 import { addFinding, type AuditRun, type AuditVerdict, type Data, findById, type Finding, initData, markVisited, openFindings, roundInfo } from "./data.ts";
 import { auditPrompt, findingText, fixPrompt, patternPrompt, reviewPrompt } from "./prompts.ts";
+import { narrate } from "./narrative.ts";
 import { callCommit, executive, reportHtml } from "./html.ts";
 import { report } from "./report.ts";
 import { PatternSchema, type Resolution, ResolutionSchema, ReviewSchema } from "./schemas.ts";
@@ -30,6 +31,7 @@ export const codeReview: Workflow<Data, Config> = {
   report,
   executive,
   callCommit,
+  narrate,
   html: reportHtml,
 
   async run(ctx) {

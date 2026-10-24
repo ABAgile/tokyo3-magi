@@ -15,6 +15,8 @@ export interface Config {
     organize: string[];
     /** Auditors, in order; each audit slice starts on a different one. */
     audit: string[];
+    /** Writes the summary of `magi report` from the run's facts. */
+    summary: string[];
   };
   /** Review rounds at most. Findings of the last review are still fixed, without a re-review. */
   maxRounds: number;
@@ -41,6 +43,9 @@ export interface Config {
   coverageExclude: string[];
 }
 
+/** The summary models, also used for runs saved before the role existed. */
+export const SUMMARY_MODELS = ["anthropic/claude-sonnet-5-5:medium", "anthropic/claude-haiku-5-5:medium"];
+
 export function defaults(targetDir: string): Config {
   return {
     models: {
@@ -49,6 +54,7 @@ export function defaults(targetDir: string): Config {
       fix: ["anthropic/claude-haiku-5-5:high", "anthropic/claude-sonnet-5-5:high", "anthropic/claude-opus-5-5:high"],
       organize: ["anthropic/claude-haiku-5-5:medium", "anthropic/claude-sonnet-5-5:medium"],
       audit: ["anthropic/claude-sonnet-5-5:high", "anthropic/claude-haiku-5-5:high"],
+      summary: SUMMARY_MODELS,
     },
     maxRounds: 6,
     audits: 1,
@@ -97,4 +103,5 @@ export const options: Record<string, OptionSpec<Config>> = {
   "pattern-models": { type: "string", help: "comma-separated pattern-scan models", apply: (c, v) => (c.models.patterns = list(v)) },
   "fix-models": { type: "string", help: "comma-separated fixer models", apply: (c, v) => (c.models.fix = list(v)) },
   "organize-models": { type: "string", help: "comma-separated commit-organizer models", apply: (c, v) => (c.models.organize = list(v)) },
+  "summary-models": { type: "string", help: "comma-separated models that write the report summary", apply: (c, v) => (c.models.summary = list(v)) },
 };

@@ -16,7 +16,7 @@ function config(repo: string, extra: Partial<Config> = {}): Config {
     ...defaults(repo),
     reviewers: 2, shardLines: 12, maxRounds: 4, audits: 0,
     check: "! git grep -q BROKEN -- '*.go'",
-    models: { review: ["r/one", "r/two"], patterns: ["p/one"], fix: ["f/one", "f/two", "f/three"], organize: ["o/one"], audit: ["a/one", "a/two"] },
+    models: { review: ["r/one", "r/two"], patterns: ["p/one"], fix: ["f/one", "f/two", "f/three"], organize: ["o/one"], audit: ["a/one", "a/two"], summary: ["s/one"] },
     ...extra,
   };
 }

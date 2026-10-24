@@ -7,7 +7,7 @@ import { join, relative } from "node:path";
 import { git } from "./git.ts";
 import { CSS } from "./html-style.ts";
 import { toPoints } from "./points.ts";
-import type { AgentRecord, Question, RunState, RunSummary, SessionLink, SummaryMetric, SummaryPoint, Workflow } from "./types.ts";
+import type { AgentRecord, Narrative, Question, RunState, RunSummary, SessionLink, SummaryMetric, SummaryPoint, Workflow } from "./types.ts";
 
 /** Applies the saved light or dark choice before the page paints; without one, the system setting applies. */
 const THEME_EARLY = `<script>(function(){try{var t=localStorage.getItem('magi-theme');if(t==='light'||t==='dark'){document.documentElement.dataset.theme=t;}}catch(e){}})();</script>`;
@@ -55,6 +55,8 @@ export interface HtmlOptions {
   sessions: boolean;
   /** The pi executable. */
   pi: string;
+  /** The agent-written summary, when there is one. */
+  narrative?: Narrative;
 }
 
 /** The page of a commit, relative to the report page. */
@@ -240,6 +242,18 @@ ${THEME_TOGGLE}
 `;
 }
 
+/** The agent's summary: where the project stands, and the fixes grouped by kind of defect. */
+function narrativeBlock(n: Narrative | undefined): string {
+  if (!n) return "";
+  const state = n.state.length
+    ? `<div class="pt-group"><h3 class="list-title">Where the project stands</h3>${reasons(n.state.map((text) => ({ text })))}</div>`
+    : "";
+  const groups = n.categories.length
+    ? `<div class="pt-group"><h3 class="list-title">Fixing categories</h3>${n.categories.map((c) => `<div class="block"><h4>${inline(c.title)}</h4><p>${inline(c.summary)}</p><p>${c.ids.map((id) => `<a href="#${esc(id)}">${esc(id)}</a>`).join(", ")}</p></div>`).join("")}</div>`
+    : "";
+  return `${state}${groups}<p class="hint">Written by ${esc(n.model)} on ${esc(n.at.slice(0, 10))} from the run's facts; the figures and lists above are from the run data.</p>`;
+}
+
 /** Write <run>/report/index.html, with transcripts and commit pages beside it. Returns the page's path. */
 export function writeHtmlReport<D, C>(s: RunState<D, C>, workflow: Workflow<D, C>, o: HtmlOptions): string {
   const dir = join(s.runDir, "report");
@@ -252,7 +266,7 @@ export function writeHtmlReport<D, C>(s: RunState<D, C>, workflow: Workflow<D, C
   const raw = hasBranch(s, `${s.target.branch}-raw`) ? commitsOf(s, `${s.target.branch}-raw`) : [];
   for (const c of [...commits, ...raw]) writeFileSync(join(dir, commitHref(c.sha)), renderCommitPage(c));
   const file = join(dir, "index.html");
-  writeFileSync(file, renderPage(s, workflow, (session) => links.get(session), commits, raw));
+  writeFileSync(file, renderPage(s, workflow, (session) => links.get(session), commits, raw, o.narrative));
   return file;
 }
 
@@ -387,7 +401,7 @@ ${table("Model type", byType)}
 <p class="hint">Calls run in parallel, so the total call time can be longer than the wall clock.</p>`;
 }
 
-function renderPage<D, C>(s: RunState<D, C>, workflow: Workflow<D, C>, link: SessionLink, commits: CommitInfo[], raw: CommitInfo[]): string {
+function renderPage<D, C>(s: RunState<D, C>, workflow: Workflow<D, C>, link: SessionLink, commits: CommitInfo[], raw: CommitInfo[], narrative?: Narrative): string {
   const t = s.target;
   const agents = [...s.agents].sort((a, b) => a.startedAt.localeCompare(b.startedAt));
   const now = Date.now();
@@ -418,6 +432,7 @@ function renderPage<D, C>(s: RunState<D, C>, workflow: Workflow<D, C>, link: Ses
 <div class="rulebox"><span class="k">Executive summary</span><b>${figures(inline(summary.headline))}</b></div>
 ${figs(rows)}
 ${summary.points.length ? reasons(summary.points) : ""}
+${narrativeBlock(narrative)}
 ${(summary.lists ?? []).map((l) => `<div class="pt-group"><h3 class="list-title">${esc(l.title)}</h3>${reasons(l.points)}</div>`).join("")}
 ${needsYou}`);
 
