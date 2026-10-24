@@ -29,9 +29,27 @@ export interface OrganizeOptions {
   checkEachCommit: boolean;
   /** Extra context for a commit, e.g. the findings it addresses. */
   describe?: (sha: string) => string;
+  /** The map from an earlier organizing, so commits organized twice still resolve to the commit on the branch. */
+  previous?: Record<string, string>;
 }
 
-export interface Organized { from: number; to: number; raw: string; head: string }
+/**
+ * The outcome of organizing. `map` takes every commit the history had before to the commit that holds its change
+ * now: a commit that was combined with others maps to their one commit. `raw` is the branch with the history as it
+ * was before the first organizing, the per-finding history.
+ */
+export interface Organized { from: number; to: number; raw: string; head: string; map: Record<string, string> }
+
+/** Chain two maps: what earlier organizing mapped, followed through the one just made. */
+export function composeMap(now: Record<string, string>, previous: Record<string, string> = {}): Record<string, string> {
+  const out = { ...now };
+  for (const [orig, mid] of Object.entries(previous)) out[orig] = now[mid] ?? mid;
+  return out;
+}
+
+function branchExists(wt: string, name: string): boolean {
+  return spawnSync("git", ["rev-parse", "--verify", "-q", `refs/heads/${name}`], { cwd: wt }).status === 0;
+}
 
 /** Organize the commits since the run's base. Journaled per HEAD, so it reruns only after new commits. */
 export async function organizeHistory<D, C>(ctx: Ctx<D, C>, o: OrganizeOptions): Promise<Organized | null> {
@@ -96,11 +114,13 @@ function normalize(plan: Plan, shas: string[]): string | undefined {
 }
 
 /** Replay the plan on a detached HEAD at the base. On success HEAD is the new history; call restore() or adopt(). */
-function replay(s: RunState, plan: Plan): { made: string[] } | { problem: string } {
+function replay(s: RunState, plan: Plan): { made: string[]; map: Record<string, string> } | { problem: string } {
   const wt = s.target.worktree;
   const tree = git(wt, ["rev-parse", "HEAD^{tree}"]).trim();
   git(wt, ["checkout", "-q", "--detach", s.target.base]);
   const made: string[] = [];
+  const map: Record<string, string> = {};
+  let last = s.target.base; // a group whose changes cancel out makes no commit; its commits fold into the one before
   for (const c of plan.commits) {
     for (const sha of c.shas) {
       if (spawnSync("git", ["cherry-pick", "--no-commit", sha], { cwd: wt }).status !== 0) {
@@ -108,10 +128,14 @@ function replay(s: RunState, plan: Plan): { made: string[] } | { problem: string
       }
     }
     const sha = commitAll(wt, `${c.subject.trim()}\n\n${c.body.trim()}\n`);
-    if (sha) made.push(sha);
+    if (sha) {
+      made.push(sha);
+      last = sha;
+    }
+    for (const from of c.shas) map[from] = last;
   }
   if (git(wt, ["rev-parse", "HEAD^{tree}"]).trim() !== tree) return { problem: "the rebuilt history does not end at the same tree" };
-  return { made };
+  return { made, map };
 }
 
 /** Back to the branch as it was. */
@@ -139,10 +163,14 @@ function rebuild(s: RunState, plan: Plan, o: OrganizeOptions): Organized | strin
     restore(s);
     return err instanceof Error ? err.message : String(err);
   }
+  // The per-finding history is kept from the first organizing on: later organizing starts from an organized history.
   const raw = `${s.target.branch}-raw`;
-  git(s.target.worktree, ["branch", "-f", raw, original]);
+  if (!branchExists(s.target.worktree, raw)) git(s.target.worktree, ["branch", raw, original]);
   git(s.target.worktree, ["checkout", "-q", "-B", s.target.branch]);
-  return { from: plan.commits.reduce((n, c) => n + c.shas.length, 0), to: r.made.length, raw, head: head(s.target.worktree) };
+  return {
+    from: plan.commits.reduce((n, c) => n + c.shas.length, 0), to: r.made.length, raw, head: head(s.target.worktree),
+    map: composeMap(r.map, o.previous),
+  };
 }
 
 /** Run the check on each new commit in a scratch worktree, so every commit builds on its own. */

@@ -67,9 +67,9 @@ async function finish(ctx: C, outcome: Outcome): Promise<Outcome> {
     const ids = ctx.data.findings.filter((f) => f.attempts.some((a) => a.commit === sha)).map((f) => `${f.id} ${f.title}`);
     return ids.length ? `Addresses: ${ids.join("; ")}` : "";
   };
-  const organized = await organizeHistory(ctx, { ...ctx.config, models: ctx.config.models.organize, describe });
+  const organized = await organizeHistory(ctx, { ...ctx.config, models: ctx.config.models.organize, describe, previous: ctx.data.organized?.map });
   if (organized) {
-    ctx.data.organized = { from: organized.from, to: organized.to, raw: organized.raw };
+    ctx.data.organized = { from: organized.from, to: organized.to, raw: organized.raw, map: organized.map };
     ctx.save();
   }
   return outcome;

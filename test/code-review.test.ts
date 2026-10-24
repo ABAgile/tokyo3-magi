@@ -122,6 +122,18 @@ test("code-review: review, gated fixes, failover, deferral, organize, then a hum
   assert.equal(byId("P2").status, "fixed");
   assert.match(readFileSync(join(wt, "c/d.go"), "utf8"), /merged/);
   assert.equal(sh(wt, "status", "--porcelain"), "");
+
+  // A second organizing keeps the per-finding history, and every attempt resolves to the commit on the branch.
+  const rawHistory = sh(wt, "rev-list", `${run.state.target.base}..${run.state.target.branch}-raw`).split("\n");
+  const firstAttempt = run.data.findings.flatMap((f) => f.attempts).find((a) => a.commit)!;
+  assert.ok(rawHistory.includes(firstAttempt.commit!), "the original commits stay on the raw branch");
+  const onBranch = sh(wt, "rev-parse", "HEAD");
+  const map = run.data.organized?.map ?? {};
+  for (const f of run.data.findings) {
+    for (const a of f.attempts) {
+      if (a.commit) assert.equal(map[a.commit] ?? a.commit, onBranch, `${f.id}: ${a.commit.slice(0, 9)} resolves to the commit on the branch`);
+    }
+  }
 });
 
 test("code-review: the round limit stops the loop, fixing the last findings without another review", async () => {

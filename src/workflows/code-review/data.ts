@@ -88,7 +88,8 @@ export interface Data {
   /** Whether fixes must pass the check. Off while the project fails it without any change. */
   checkGate: boolean;
   baseline?: { ok: boolean; output: string };
-  organized?: { from: number; to: number; raw: string };
+  /** Set once the history is organized: the per-finding commits map to the commits that hold them now. */
+  organized?: { from: number; to: number; raw: string; map: Record<string, string> };
 }
 
 export function initData(): Data {
