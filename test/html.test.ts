@@ -127,3 +127,25 @@ test("html report: the summary's first figures run fixed, rejected, decisions, c
   const html = readFileSync(writeHtmlReport(run.state, codeReview, { sessions: false, pi: "/nonexistent" }), "utf8");
   assert.match(html, /Findings fixed[\s\S]*Rejected or duplicate[\s\S]*Decisions open[\s\S]*Commits[\s\S]*Files read[\s\S]*Final audit/);
 });
+
+test("html report leaves the summary's own call out of the figures and the timeline", () => {
+  const repo = scratchRepo();
+  const run = newRun(codeReview, defaults(repo), repo, new FakeDriver(() => {}));
+  const s = run.state;
+  s.agents.push({
+    key: "r1/review/1", model: "m/one", driver: "fake", startedAt: "2026-01-01T00:00:00.000Z",
+    finishedAt: "2026-01-01T00:05:00.000Z", cost: 0.5, turns: 1,
+  });
+  // Written after the run ended: must not stretch the wall clock or add to the calls.
+  s.agents.push({
+    key: "summary", model: "m/writer", driver: "fake", startedAt: "2026-01-02T00:00:00.000Z",
+    finishedAt: "2026-01-02T00:10:00.000Z", cost: 0.04, turns: 1,
+  });
+  const html = readFileSync(writeHtmlReport(s, codeReview, { sessions: false, pi: "/nonexistent" }), "utf8");
+  assert.doesNotMatch(html, /m\/writer/, "the summary call is not listed, in the timeline or the tables");
+  assert.match(html, /Every agent call \(1\)/);
+  assert.equal(html.match(/class="bar-run /g)?.length, 1, "one bar in the timeline");
+  assert.match(html, /Agent calls<\/span><span class="v">1</);
+  assert.match(html, /Total call time<\/span><span class="v">5.0 min</);
+  assert.match(html, /Wall clock<\/span><span class="v">5.0 min</, "the wall clock ends with the last real call");
+});

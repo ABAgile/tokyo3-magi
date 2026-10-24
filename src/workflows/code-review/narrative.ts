@@ -1,7 +1,7 @@
 // The report's summary prose. An agent writes where the project stands and groups the fixed findings by kind of
 // defect, from the run's facts. Figures and lists on the page come from the data, never from this text.
 import type { Static } from "typebox";
-import { fingerprint, readNarrative, writeNarrative } from "../../engine/narrative.ts";
+import { fingerprint, NARRATIVE_KEY, readNarrative, writeNarrative } from "../../engine/narrative.ts";
 import type { Ctx, Narrative, RunState } from "../../engine/types.ts";
 import { type Config, SUMMARY_MODELS } from "./config.ts";
 import { type Data, type Finding } from "./data.ts";
@@ -19,7 +19,7 @@ export async function narrate(ctx: C): Promise<Narrative | undefined> {
 
   const fixed = ctx.data.findings.filter((f) => f.status === "fixed");
   const o = await ctx.agent({
-    key: "summary", models: ctx.config.models.summary ?? SUMMARY_MODELS, write: false, result: NarrativeSchema, maxRepairs: 3,
+    key: NARRATIVE_KEY, models: ctx.config.models.summary ?? SUMMARY_MODELS, write: false, result: NarrativeSchema, maxRepairs: 3,
     prompt: () => prompt,
     verify: (r) => coverage(r, fixed),
   });

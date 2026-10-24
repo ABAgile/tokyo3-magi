@@ -7,6 +7,9 @@ import type { Narrative } from "./types.ts";
 
 export interface CachedNarrative { fingerprint: string; narrative: Narrative }
 
+/** The agent key of the summary call. Its record stays in the run's state (for cost), but the report leaves it out. */
+export const NARRATIVE_KEY = "summary";
+
 const fileOf = (runDir: string): string => join(runDir, "report", "narrative.json");
 
 export const fingerprint = (text: string): string => createHash("sha256").update(text).digest("hex");

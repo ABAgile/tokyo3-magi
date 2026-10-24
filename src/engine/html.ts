@@ -6,6 +6,7 @@ import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { git } from "./git.ts";
 import { CSS } from "./html-style.ts";
+import { NARRATIVE_KEY } from "./narrative.ts";
 import { toPoints } from "./points.ts";
 import type { AgentRecord, Narrative, Question, RunState, RunSummary, SessionLink, SummaryMetric, SummaryPoint, Workflow } from "./types.ts";
 
@@ -403,7 +404,8 @@ ${table("Model type", byType)}
 
 function renderPage<D, C>(s: RunState<D, C>, workflow: Workflow<D, C>, link: SessionLink, commits: CommitInfo[], raw: CommitInfo[], narrative?: Narrative): string {
   const t = s.target;
-  const agents = [...s.agents].sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+  // The summary's own call is left out: the figures describe the run, not the writing of its report.
+  const agents = s.agents.filter((a) => a.key !== NARRATIVE_KEY).sort((a, b) => a.startedAt.localeCompare(b.startedAt));
   const now = Date.now();
   const endOf = (a: AgentRecord): number => (a.finishedAt ? Date.parse(a.finishedAt) : now);
   const t0 = Math.min(Date.parse(s.createdAt), ...agents.map((a) => Date.parse(a.startedAt)));
